@@ -54,13 +54,30 @@ jobs:
         run: |
           git config user.name  "monitor-bot"
           git config user.email "monitor-bot@users.noreply.github.com"
+
           if git diff --quiet -- last_product_ids.json; then
             echo "狀態檔沒有變化，不需要 commit。"
-          else
-            git add last_product_ids.json
-            git commit -m "chore: update last_product_ids.json [skip ci]"
-            # 先 rebase 拉取期間可能的其他提交，降低 push 衝突
-            git pull --rebase --autostash || true
-            git push
-            echo "已將更新後的狀態檔推回 repo。"
+            exit 0
           fi
+
+          # ── 防衝突的回推策略（last-writer-wins）──
+          # 不用 rebase（兩邊都改同一個 JSON 會衝突、卡 detached HEAD）。
+          # 改成：先保存「本次算好的狀態」，同步到最新遠端後直接覆蓋再 push，
+          # 永遠是乾淨地疊在 origin/main 之上，不會有合併衝突。
+          # 失敗時自動重試幾次，吸收偶發的並行推送。
+          cp last_product_ids.json /tmp/state.json
+          for i in 1 2 3; do
+            git fetch origin main
+            git checkout -B main origin/main
+            cp /tmp/state.json last_product_ids.json
+            git add last_product_ids.json
+            git diff --cached --quiet && { echo "與遠端一致，無需提交。"; exit 0; }
+            git commit -m "chore: update last_product_ids.json [skip ci]"
+            if git push origin main; then
+              echo "已將更新後的狀態檔推回 repo。"
+              exit 0
+            fi
+            echo "推送被搶先（第 $i 次），重新同步後重試..."
+            sleep 3
+          done
+          echo "⚠️ 連續重試後仍無法推送狀態檔；本次偵測通知已送出，下次執行會重新建立 baseline。"
