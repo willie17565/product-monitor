@@ -59,7 +59,21 @@ REQUEST_HEADERS = {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     ),
+    "Accept": (
+        "text/html,application/xhtml+xml,application/xml;q=0.9,"
+        "image/avif,image/webp,image/apng,*/*;q=0.8"
+    ),
     "Accept-Language": "zh-TW,zh;q=0.9,en;q=0.8",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Fetch-User": "?1",
+    "sec-ch-ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"Windows"',
+    "Connection": "keep-alive",
 }
 
 
@@ -69,9 +83,20 @@ REQUEST_HEADERS = {
 #    依 ID 由大到小排序。失敗回傳 None。
 # ============================================================
 def _http_get(url):
-    """共用 HTTP GET，失敗印錯誤訊息並回傳 None。"""
+    """共用 HTTP GET，失敗印錯誤訊息並回傳 None。
+
+    額外帶上以該網站首頁為來源的 Referer（模擬「從首頁點進列表」），
+    部分網站會以此判斷是否為正常瀏覽。注意：若對方是直接封鎖機房 IP 整段，
+    補標頭也救不回來，這時只能換出口 IP（付費代理）或改在家用網路執行。
+    """
+    headers = dict(REQUEST_HEADERS)
+    m = re.match(r"(https?://[^/]+)", url)
+    if m:
+        origin = m.group(1)
+        headers["Referer"] = origin + "/"
+        headers["Origin"] = origin
     try:
-        resp = requests.get(url, headers=REQUEST_HEADERS, timeout=15)
+        resp = requests.get(url, headers=headers, timeout=20)
         resp.raise_for_status()
         resp.encoding = "utf-8"
         return resp
