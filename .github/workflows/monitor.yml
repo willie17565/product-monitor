@@ -1,0 +1,66 @@
+name: 8591/591 新品偵測
+
+# ──────────────────────────────────────────────
+# 觸發方式
+#   1) schedule：依 cron 自動跑（時間是 UTC，見下方換算）
+#   2) workflow_dispatch：在 GitHub 網頁上手動按「Run workflow」
+#      → 第一次部署完，先用這個手動跑一次，驗證從 GitHub 的 IP 抓不抓得到資料
+# ──────────────────────────────────────────────
+on:
+  workflow_dispatch:
+  schedule:
+    # GitHub cron 用「UTC」時間，台灣是 UTC+8。
+    # 想要的台灣時段：每天 09:00–23:59
+    #   台灣 09:00 = UTC 01:00
+    #   台灣 23:59 = UTC 15:59
+    # 所以 UTC 小時範圍是 1–15，每 5 分鐘一次。
+    # 注意：GitHub 排程最短只能 5 分鐘，且尖峰時可能延遲數分鐘、偶爾跳過一次。
+    - cron: "*/5 1-15 * * *"
+
+# 同一時間只允許一個執行，避免兩次重疊導致狀態檔衝突
+concurrency:
+  group: monitor
+  cancel-in-progress: false
+
+# 需要寫入權限，才能把更新後的 last_product_ids.json commit 回 repo
+permissions:
+  contents: write
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 取出程式碼
+        uses: actions/checkout@v4
+
+      - name: 安裝 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 安裝依賴
+        run: pip install -r requirements.txt
+
+      - name: 執行單次偵測
+        env:
+          # Discord webhook 來自 repo 的 Secret（不會出現在程式碼裡）
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: python monitor_once.py
+
+      - name: 將狀態檔 last_product_ids.json 存回 repo
+        # always()：即使前一步抓取部分失敗，也把已更新的 baseline 存回
+        if: always()
+        run: |
+          git config user.name  "monitor-bot"
+          git config user.email "monitor-bot@users.noreply.github.com"
+          if git diff --quiet -- last_product_ids.json; then
+            echo "狀態檔沒有變化，不需要 commit。"
+          else
+            git add last_product_ids.json
+            git commit -m "chore: update last_product_ids.json [skip ci]"
+            # 先 rebase 拉取期間可能的其他提交，降低 push 衝突
+            git pull --rebase --autostash || true
+            git push
+            echo "已將更新後的狀態檔推回 repo。"
+          fi
